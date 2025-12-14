@@ -39,9 +39,32 @@ local classColors = {
 
 -- Initialize addon
 function BLT:Initialize()
+    -- Register events first (before saved variables are loaded)
+    self.frame = CreateFrame("Frame")
+    self.frame:RegisterEvent("ADDON_LOADED")
+    self.frame:RegisterEvent("CHAT_MSG_LOOT")
+    self.frame:RegisterEvent("PLAYER_LOGIN")
+    self.frame:SetScript("OnEvent", function(frame, event, ...)
+        BLT:OnEvent(event, ...)
+    end)
+    
+    -- Register slash command
+    SLASH_BLT1 = "/blt"
+    SlashCmdList["BLT"] = function(msg)
+        BLT:ToggleMainWindow()
+    end
+end
+
+-- Load saved variables (called after ADDON_LOADED)
+function BLT:LoadSavedVariables()
     -- Initialize database
     if not BronzebeardLootTableDB then
         BronzebeardLootTableDB = {}
+    end
+    
+    -- Initialize money tracking database
+    if not BronzebeardLootTableMoneyDB then
+        BronzebeardLootTableMoneyDB = {}
     end
     
     -- Initialize settings
@@ -61,28 +84,23 @@ function BLT:Initialize()
     end
     
     self.db = BronzebeardLootTableDB
+    self.moneyDB = BronzebeardLootTableMoneyDB
     self.settings = BronzebeardLootTableSettings
-    
-    -- Register events
-    self.frame = CreateFrame("Frame")
-    self.frame:RegisterEvent("CHAT_MSG_LOOT")
-    self.frame:RegisterEvent("PLAYER_LOGIN")
-    self.frame:SetScript("OnEvent", function(frame, event, ...)
-        BLT:OnEvent(event, ...)
-    end)
-    
-    -- Register slash command
-    SLASH_BLT1 = "/blt"
-    SlashCmdList["BLT"] = function(msg)
-        BLT:ToggleMainWindow()
-    end
+    self.currentZone = nil
+    self.currentZoneStartTime = nil
     
     print("|cFF00FF00BronzebeardLootTable|r v" .. self.version .. " loaded. Type |cFFFFFF00/blt|r to open.")
 end
 
 -- Event handler
 function BLT:OnEvent(event, ...)
-    if event == "PLAYER_LOGIN" then
+    if event == "ADDON_LOADED" then
+        local addonName = ...
+        if addonName == "BronzebeardLootTable" then
+            self:LoadSavedVariables()
+            self.frame:UnregisterEvent("ADDON_LOADED")
+        end
+    elseif event == "PLAYER_LOGIN" then
         self:CreateSettingsPanel()
     elseif event == "CHAT_MSG_LOOT" then
         self:OnLootReceived(...)
@@ -91,12 +109,33 @@ end
 
 -- Parse loot message and store data
 function BLT:OnLootReceived(message)
-    -- Parse pattern: "PlayerName receives item: [Item Link]."
+    -- First check if this is a money loot message
+    if self:ParseMoneyLoot(message) then
+        return -- Money was tracked, we're done
+    end
+    
+    -- Parse pattern: "PlayerName receives item: [Item Link]." or "You receive loot: [Item Link]."
     local playerName, itemLink = string.match(message, "(.+) receives loot: (.+)%.")
     
     if not playerName or not itemLink then
-        -- Try alternate pattern
+        -- Try alternate pattern for "receives item"
         playerName, itemLink = string.match(message, "(.+) receives item: (.+)%.")
+    end
+    
+    if not playerName or not itemLink then
+        -- Try pattern for "You receive loot"
+        itemLink = string.match(message, "You receive loot: (.+)%.")
+        if itemLink then
+            playerName = UnitName("player")
+        end
+    end
+    
+    if not playerName or not itemLink then
+        -- Try pattern for "You receive item"
+        itemLink = string.match(message, "You receive item: (.+)%.")
+        if itemLink then
+            playerName = UnitName("player")
+        end
     end
     
     if not playerName or not itemLink then
@@ -147,6 +186,73 @@ function BLT:OnLootReceived(message)
     }
     
     table.insert(self.db, entry)
+end
+
+-- Parse and track money looting
+function BLT:ParseMoneyLoot(message)
+    -- Check for "You loot" pattern (money only says "You loot", not "You receive")
+    if not string.find(message, "You loot") then
+        return false
+    end
+    
+    -- Parse money values
+    local gold = string.match(message, "(%d+) Gold") or 0
+    local silver = string.match(message, "(%d+) Silver") or 0
+    local copper = string.match(message, "(%d+) Copper") or 0
+    
+    -- Convert to numbers
+    gold = tonumber(gold) or 0
+    silver = tonumber(silver) or 0
+    copper = tonumber(copper) or 0
+    
+    -- Check if any money was found
+    if gold == 0 and silver == 0 and copper == 0 then
+        return false -- Not a money message
+    end
+    
+    -- Convert everything to copper for easier aggregation
+    local totalCopper = (gold * 10000) + (silver * 100) + copper
+    
+    -- Get current zone and time
+    local zone = GetRealZoneText()
+    local timestamp = time()
+    
+    -- Update or create zone entry for money tracking
+    self:UpdateMoneyForZone(zone, timestamp, totalCopper)
+    
+    return true
+end
+
+-- Update money tracking for a zone/instance
+function BLT:UpdateMoneyForZone(zone, timestamp, copper)
+    if not zone or zone == "" then
+        return
+    end
+    
+    -- Check if we're in a new zone or if enough time has passed (4 hours = new instance run)
+    local createNewEntry = true
+    
+    -- Look for existing entry in the same zone within 4 hours
+    for _, entry in ipairs(self.moneyDB) do
+        if entry.zone == zone and (timestamp - entry.startTime) <= 14400 then
+            -- Same zone and within 4 hours, aggregate the money
+            entry.totalCopper = entry.totalCopper + copper
+            entry.lastUpdate = timestamp
+            createNewEntry = false
+            break
+        end
+    end
+    
+    -- Create new entry if needed
+    if createNewEntry then
+        local entry = {
+            zone = zone,
+            startTime = timestamp,
+            lastUpdate = timestamp,
+            totalCopper = copper,
+        }
+        table.insert(self.moneyDB, entry)
+    end
 end
 
 -- Get player class
@@ -384,8 +490,15 @@ function BLT:CreateMainWindow()
     
     -- Status text
     local statusText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    statusText:SetPoint("BOTTOM", 0, 15)
+    statusText:SetPoint("BOTTOMLEFT", 20, 15)
     statusText:SetText("0 entries shown")
+    statusText:SetJustifyH("LEFT")
+    
+    -- Money display text
+    local moneyText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    moneyText:SetPoint("BOTTOMRIGHT", -20, 15)
+    moneyText:SetText("Total Money: 0c")
+    moneyText:SetJustifyH("RIGHT")
     
     -- Store references
     window.winnerEdit = winnerEdit
@@ -395,6 +508,7 @@ function BLT:CreateMainWindow()
     window.todayCheck = todayCheck
     window.scrollChild = scrollChild
     window.statusText = statusText
+    window.moneyText = moneyText
     window.rowFrames = {}
     
     self.mainWindow = window
@@ -563,11 +677,79 @@ function BLT:UpdateList()
         return a.timestamp > b.timestamp
     end)
     
+    -- Calculate money total for the same filters
+    local totalMoney = self:CalculateMoneyForFilters(todayStart, instanceFilter)
+    
     -- Update display
     self:DisplayEntries(filteredEntries)
     
     -- Update status text
     self.mainWindow.statusText:SetText(#filteredEntries .. " entries shown (of " .. #self.db .. " total)")
+    
+    -- Update money text
+    self.mainWindow.moneyText:SetText("Total Money: " .. self:FormatMoney(totalMoney))
+end
+
+-- Calculate money total for the current filters
+function BLT:CalculateMoneyForFilters(todayStart, instanceFilter)
+    if not self.moneyDB then return 0 end
+    
+    local totalCopper = 0
+    
+    for _, entry in ipairs(self.moneyDB) do
+        local passes = true
+        
+        -- Date filter (check if money was looted today)
+        if todayStart and entry.startTime < todayStart then
+            passes = false
+        end
+        
+        -- Instance filter
+        if passes and instanceFilter then
+            -- Check if entry is in the same zone and within the run's time range
+            if entry.zone ~= instanceFilter.zone then
+                passes = false
+            elseif entry.startTime < instanceFilter.startTime or 
+                   entry.startTime > (instanceFilter.startTime + 14400) then
+                passes = false
+            end
+        end
+        
+        if passes then
+            totalCopper = totalCopper + entry.totalCopper
+        end
+    end
+    
+    return totalCopper
+end
+
+-- Format money in copper to a readable string
+function BLT:FormatMoney(copper)
+    if copper == 0 then
+        return "|cFFAAAAAA0c|r"
+    end
+    
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper % 10000) / 100)
+    local copperRemainder = copper % 100
+    
+    local result = ""
+    
+    if gold > 0 then
+        result = result .. "|cFFFFD700" .. gold .. "g|r"
+    end
+    
+    if silver > 0 then
+        if result ~= "" then result = result .. " " end
+        result = result .. "|cFFC0C0C0" .. silver .. "s|r"
+    end
+    
+    if copperRemainder > 0 or result == "" then
+        if result ~= "" then result = result .. " " end
+        result = result .. "|cFFCD7F32" .. copperRemainder .. "c|r"
+    end
+    
+    return result
 end
 
 -- Display entries in scroll frame
@@ -812,7 +994,9 @@ function BLT:CreateSettingsPanel()
         button2 = "No",
         OnAccept = function()
             BLT.db = {}
+            BLT.moneyDB = {}
             BronzebeardLootTableDB = {}
+            BronzebeardLootTableMoneyDB = {}
             print("|cFF00FF00BronzebeardLootTable:|r Database cleared.")
             if BLT.settingsPanel then
                 BLT.settingsPanel.dbInfo:SetText("Current entries: 0")
