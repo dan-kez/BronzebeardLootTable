@@ -91,12 +91,28 @@ end
 
 -- Parse loot message and store data
 function BLT:OnLootReceived(message)
-    -- Parse pattern: "PlayerName receives item: [Item Link]."
+    -- Parse pattern: "PlayerName receives item: [Item Link]." or "You receive loot: [Item Link]."
     local playerName, itemLink = string.match(message, "(.+) receives loot: (.+)%.")
     
     if not playerName or not itemLink then
-        -- Try alternate pattern
+        -- Try alternate pattern for "receives item"
         playerName, itemLink = string.match(message, "(.+) receives item: (.+)%.")
+    end
+    
+    if not playerName or not itemLink then
+        -- Try pattern for "You receive loot"
+        itemLink = string.match(message, "You receive loot: (.+)%.")
+        if itemLink then
+            playerName = UnitName("player")
+        end
+    end
+    
+    if not playerName or not itemLink then
+        -- Try pattern for "You receive item"
+        itemLink = string.match(message, "You receive item: (.+)%.")
+        if itemLink then
+            playerName = UnitName("player")
+        end
     end
     
     if not playerName or not itemLink then
