@@ -39,6 +39,24 @@ local classColors = {
 
 -- Initialize addon
 function BLT:Initialize()
+    -- Register events first (before saved variables are loaded)
+    self.frame = CreateFrame("Frame")
+    self.frame:RegisterEvent("ADDON_LOADED")
+    self.frame:RegisterEvent("CHAT_MSG_LOOT")
+    self.frame:RegisterEvent("PLAYER_LOGIN")
+    self.frame:SetScript("OnEvent", function(frame, event, ...)
+        BLT:OnEvent(event, ...)
+    end)
+    
+    -- Register slash command
+    SLASH_BLT1 = "/blt"
+    SlashCmdList["BLT"] = function(msg)
+        BLT:ToggleMainWindow()
+    end
+end
+
+-- Load saved variables (called after ADDON_LOADED)
+function BLT:LoadSavedVariables()
     -- Initialize database
     if not BronzebeardLootTableDB then
         BronzebeardLootTableDB = {}
@@ -71,26 +89,18 @@ function BLT:Initialize()
     self.currentZone = nil
     self.currentZoneStartTime = nil
     
-    -- Register events
-    self.frame = CreateFrame("Frame")
-    self.frame:RegisterEvent("CHAT_MSG_LOOT")
-    self.frame:RegisterEvent("PLAYER_LOGIN")
-    self.frame:SetScript("OnEvent", function(frame, event, ...)
-        BLT:OnEvent(event, ...)
-    end)
-    
-    -- Register slash command
-    SLASH_BLT1 = "/blt"
-    SlashCmdList["BLT"] = function(msg)
-        BLT:ToggleMainWindow()
-    end
-    
     print("|cFF00FF00BronzebeardLootTable|r v" .. self.version .. " loaded. Type |cFFFFFF00/blt|r to open.")
 end
 
 -- Event handler
 function BLT:OnEvent(event, ...)
-    if event == "PLAYER_LOGIN" then
+    if event == "ADDON_LOADED" then
+        local addonName = ...
+        if addonName == "BronzebeardLootTable" then
+            self:LoadSavedVariables()
+            self.frame:UnregisterEvent("ADDON_LOADED")
+        end
+    elseif event == "PLAYER_LOGIN" then
         self:CreateSettingsPanel()
     elseif event == "CHAT_MSG_LOOT" then
         self:OnLootReceived(...)
