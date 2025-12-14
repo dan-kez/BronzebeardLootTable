@@ -490,8 +490,15 @@ function BLT:CreateMainWindow()
     
     -- Status text
     local statusText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    statusText:SetPoint("BOTTOM", 0, 15)
+    statusText:SetPoint("BOTTOMLEFT", 20, 15)
     statusText:SetText("0 entries shown")
+    statusText:SetJustifyH("LEFT")
+    
+    -- Money display text
+    local moneyText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    moneyText:SetPoint("BOTTOMRIGHT", -20, 15)
+    moneyText:SetText("Total Money: 0c")
+    moneyText:SetJustifyH("RIGHT")
     
     -- Store references
     window.winnerEdit = winnerEdit
@@ -501,6 +508,7 @@ function BLT:CreateMainWindow()
     window.todayCheck = todayCheck
     window.scrollChild = scrollChild
     window.statusText = statusText
+    window.moneyText = moneyText
     window.rowFrames = {}
     
     self.mainWindow = window
@@ -669,11 +677,79 @@ function BLT:UpdateList()
         return a.timestamp > b.timestamp
     end)
     
+    -- Calculate money total for the same filters
+    local totalMoney = self:CalculateMoneyForFilters(todayStart, instanceFilter)
+    
     -- Update display
     self:DisplayEntries(filteredEntries)
     
     -- Update status text
     self.mainWindow.statusText:SetText(#filteredEntries .. " entries shown (of " .. #self.db .. " total)")
+    
+    -- Update money text
+    self.mainWindow.moneyText:SetText("Total Money: " .. self:FormatMoney(totalMoney))
+end
+
+-- Calculate money total for the current filters
+function BLT:CalculateMoneyForFilters(todayStart, instanceFilter)
+    if not self.moneyDB then return 0 end
+    
+    local totalCopper = 0
+    
+    for _, entry in ipairs(self.moneyDB) do
+        local passes = true
+        
+        -- Date filter (check if money was looted today)
+        if todayStart and entry.startTime < todayStart then
+            passes = false
+        end
+        
+        -- Instance filter
+        if passes and instanceFilter then
+            -- Check if entry is in the same zone and within the run's time range
+            if entry.zone ~= instanceFilter.zone then
+                passes = false
+            elseif entry.startTime < instanceFilter.startTime or 
+                   entry.startTime > (instanceFilter.startTime + 14400) then
+                passes = false
+            end
+        end
+        
+        if passes then
+            totalCopper = totalCopper + entry.totalCopper
+        end
+    end
+    
+    return totalCopper
+end
+
+-- Format money in copper to a readable string
+function BLT:FormatMoney(copper)
+    if copper == 0 then
+        return "|cFFAAAAAA0c|r"
+    end
+    
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper % 10000) / 100)
+    local copperRemainder = copper % 100
+    
+    local result = ""
+    
+    if gold > 0 then
+        result = result .. "|cFFFFD700" .. gold .. "g|r"
+    end
+    
+    if silver > 0 then
+        if result ~= "" then result = result .. " " end
+        result = result .. "|cFFC0C0C0" .. silver .. "s|r"
+    end
+    
+    if copperRemainder > 0 or result == "" then
+        if result ~= "" then result = result .. " " end
+        result = result .. "|cFFCD7F32" .. copperRemainder .. "c|r"
+    end
+    
+    return result
 end
 
 -- Display entries in scroll frame
