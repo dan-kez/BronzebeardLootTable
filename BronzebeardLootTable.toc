@@ -3,6 +3,6 @@
 ## Notes: Tracks loot history with advanced filtering and viewing options
 ## Author: BronzebeardTeam
 ## Version: 1.0.0
-## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableSettings
+## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableMoneyDB, BronzebeardLootTableSettings
 
 BronzebeardLootTable.lua

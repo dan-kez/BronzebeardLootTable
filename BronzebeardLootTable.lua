@@ -44,6 +44,11 @@ function BLT:Initialize()
         BronzebeardLootTableDB = {}
     end
     
+    -- Initialize money tracking database
+    if not BronzebeardLootTableMoneyDB then
+        BronzebeardLootTableMoneyDB = {}
+    end
+    
     -- Initialize settings
     if not BronzebeardLootTableSettings then
         BronzebeardLootTableSettings = self:CopyTable(defaultSettings)
@@ -61,7 +66,10 @@ function BLT:Initialize()
     end
     
     self.db = BronzebeardLootTableDB
+    self.moneyDB = BronzebeardLootTableMoneyDB
     self.settings = BronzebeardLootTableSettings
+    self.currentZone = nil
+    self.currentZoneStartTime = nil
     
     -- Register events
     self.frame = CreateFrame("Frame")
@@ -91,6 +99,11 @@ end
 
 -- Parse loot message and store data
 function BLT:OnLootReceived(message)
+    -- First check if this is a money loot message
+    if self:ParseMoneyLoot(message) then
+        return -- Money was tracked, we're done
+    end
+    
     -- Parse pattern: "PlayerName receives item: [Item Link]." or "You receive loot: [Item Link]."
     local playerName, itemLink = string.match(message, "(.+) receives loot: (.+)%.")
     
@@ -163,6 +176,73 @@ function BLT:OnLootReceived(message)
     }
     
     table.insert(self.db, entry)
+end
+
+-- Parse and track money looting
+function BLT:ParseMoneyLoot(message)
+    -- Check for "You loot" pattern (money only says "You loot", not "You receive")
+    if not string.find(message, "You loot") then
+        return false
+    end
+    
+    -- Parse money values
+    local gold = string.match(message, "(%d+) Gold") or 0
+    local silver = string.match(message, "(%d+) Silver") or 0
+    local copper = string.match(message, "(%d+) Copper") or 0
+    
+    -- Convert to numbers
+    gold = tonumber(gold) or 0
+    silver = tonumber(silver) or 0
+    copper = tonumber(copper) or 0
+    
+    -- Check if any money was found
+    if gold == 0 and silver == 0 and copper == 0 then
+        return false -- Not a money message
+    end
+    
+    -- Convert everything to copper for easier aggregation
+    local totalCopper = (gold * 10000) + (silver * 100) + copper
+    
+    -- Get current zone and time
+    local zone = GetRealZoneText()
+    local timestamp = time()
+    
+    -- Update or create zone entry for money tracking
+    self:UpdateMoneyForZone(zone, timestamp, totalCopper)
+    
+    return true
+end
+
+-- Update money tracking for a zone/instance
+function BLT:UpdateMoneyForZone(zone, timestamp, copper)
+    if not zone or zone == "" then
+        return
+    end
+    
+    -- Check if we're in a new zone or if enough time has passed (4 hours = new instance run)
+    local createNewEntry = true
+    
+    -- Look for existing entry in the same zone within 4 hours
+    for _, entry in ipairs(self.moneyDB) do
+        if entry.zone == zone and (timestamp - entry.startTime) <= 14400 then
+            -- Same zone and within 4 hours, aggregate the money
+            entry.totalCopper = entry.totalCopper + copper
+            entry.lastUpdate = timestamp
+            createNewEntry = false
+            break
+        end
+    end
+    
+    -- Create new entry if needed
+    if createNewEntry then
+        local entry = {
+            zone = zone,
+            startTime = timestamp,
+            lastUpdate = timestamp,
+            totalCopper = copper,
+        }
+        table.insert(self.moneyDB, entry)
+    end
 end
 
 -- Get player class
@@ -828,7 +908,9 @@ function BLT:CreateSettingsPanel()
         button2 = "No",
         OnAccept = function()
             BLT.db = {}
+            BLT.moneyDB = {}
             BronzebeardLootTableDB = {}
+            BronzebeardLootTableMoneyDB = {}
             print("|cFF00FF00BronzebeardLootTable:|r Database cleared.")
             if BLT.settingsPanel then
                 BLT.settingsPanel.dbInfo:SetText("Current entries: 0")
