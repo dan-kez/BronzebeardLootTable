@@ -2,6 +2,8 @@
 
 A comprehensive loot history tracking addon for World of Warcraft: Wrath of the Lich King (3.3.5a) - designed for WoW Ascension private server.
 
+**Built with a modular, extensible architecture** - See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details and extension examples.
+
 ## Features
 
 ### Core Functionality
@@ -74,15 +76,30 @@ Control which item rarities to track:
 
 1. Download/extract the addon files
 2. Place the `BronzebeardLootTable` folder in your `World of Warcraft/Interface/AddOns/` directory
-3. The folder should contain:
-   - `BronzebeardLootTable.toc`
-   - `BronzebeardLootTable.lua`
+3. The folder structure should look like:
+   ```
+   Interface/AddOns/BronzebeardLootTable/
+   ├── BronzebeardLootTable.toc
+   ├── Core.lua
+   ├── Utils/
+   │   ├── Constants.lua
+   │   └── Helpers.lua
+   ├── Data/
+   │   ├── Database.lua
+   │   └── Filters.lua
+   └── UI/
+       ├── MainWindow.lua
+       └── SettingsPanel.lua
+   ```
 4. Restart WoW or reload UI (`/reload`)
 5. Ensure the addon is enabled in the character select screen
 
 ## Commands
 
-- `/blt` - Toggle the main loot history window
+- `/blt` or `/blt show` - Toggle the main loot history window
+- `/blt config` or `/blt settings` - Open settings panel
+- `/blt stats` - Show database statistics
+- `/blt help` - Show command help
 
 ## Technical Details
 
@@ -115,6 +132,50 @@ Current Version: **1.0.0**
 ## Author
 
 BronzebeardTeam
+
+## Architecture
+
+BronzebeardLootTable uses a **modular architecture** that separates concerns into distinct layers:
+
+- **Core Layer**: Coordinates modules and handles addon lifecycle
+- **Utilities Layer**: Constants and helper functions used across the addon
+- **Data Layer**: Database management and filtering logic
+- **UI Layer**: User interface components
+
+This design makes the addon highly extensible. For detailed architecture documentation, extension examples, and best practices, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Quick Extension Example
+
+Adding a new feature is straightforward. For example, to add item icons:
+
+1. Add configuration to `Utils/Constants.lua`
+2. Add helper function to `Utils/Helpers.lua`
+3. Update display in `UI/MainWindow.lua`
+
+See the Architecture documentation for complete examples.
+
+## Development
+
+### Module Dependencies
+
+```
+Core.lua (coordinates everything)
+  ↓
+UI Layer (MainWindow, SettingsPanel)
+  ↓
+Data Layer (Database, Filters)
+  ↓
+Utils Layer (Constants, Helpers)
+```
+
+### Contributing
+
+When adding new features:
+1. Follow the existing module structure
+2. Add new modules in appropriate directories
+3. Update the TOC file with proper load order
+4. Document your changes
+5. Test with various database sizes and scenarios
 
 ## License
 

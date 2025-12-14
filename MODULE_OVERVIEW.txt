@@ -1,0 +1,163 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                    BRONZEBEARD LOOT TABLE ARCHITECTURE                    ║
+║                          Modular Design Overview                          ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              CORE LAYER                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Core.lua (238 lines)                                           │   │
+│  │  • Initializes all modules                                      │   │
+│  │  • Routes events (CHAT_MSG_LOOT, PLAYER_LOGIN)                 │   │
+│  │  • Handles slash commands (/blt, /blt config, /blt stats)     │   │
+│  │  • Coordinates between all layers                               │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │ coordinates
+           ┌─────────────────┼─────────────────┐
+           │                 │                 │
+           ▼                 ▼                 ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│    UI LAYER      │  │   DATA LAYER     │  │   UTILS LAYER    │
+├──────────────────┤  ├──────────────────┤  ├──────────────────┤
+│ MainWindow.lua   │  │ Database.lua     │  │ Constants.lua    │
+│   (334 lines)    │  │   (243 lines)    │  │   (114 lines)    │
+│                  │  │                  │  │                  │
+│ • Main UI frame  │  │ • SavedVariables │  │ • Addon config   │
+│ • Filter inputs  │  │ • Entry storage  │  │ • UI dimensions  │
+│ • Entry display  │  │ • Settings mgmt  │  │ • Class colors   │
+│ • Dropdown menu  │  │ • Track rules    │  │ • Rarity labels  │
+│ • Tooltips       │  │ • Statistics     │  │ • Default values │
+│ • Row rendering  │  │ • Import/Export  │  │ • Event names    │
+│                  │  │                  │  │                  │
+├──────────────────┤  ├──────────────────┤  ├──────────────────┤
+│ SettingsPanel    │  │ Filters.lua      │  │ Helpers.lua      │
+│   (178 lines)    │  │   (227 lines)    │  │   (155 lines)    │
+│                  │  │                  │  │                  │
+│ • Options panel  │  │ • Filter state   │  │ • Table utils    │
+│ • Rarity checks  │  │ • Apply filters  │  │ • Date/time fmt  │
+│ • Special items  │  │ • Build runs     │  │ • Player info    │
+│ • DB management  │  │ • Entry matching │  │ • String search  │
+│ • Clear confirm  │  │ • Quick filters  │  │ • Color text     │
+│                  │  │ • Filter summary │  │ • Print helpers  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+         │                     │                      │
+         └─────────────────────┴──────────────────────┘
+                              │ all depend on
+                              ▼
+                    ┌──────────────────┐
+                    │  WoW API (3.3.5a)│
+                    └──────────────────┘
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                            DATA FLOW EXAMPLES                             ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+LOOT EVENT FLOW:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. Game triggers CHAT_MSG_LOOT                                          │
+│    ↓                                                                    │
+│ 2. Core.OnEvent() receives event                                       │
+│    ↓                                                                    │
+│ 3. Core.OnLootReceived() parses message using Helpers                  │
+│    ↓                                                                    │
+│ 4. Core gets item info and player info                                 │
+│    ↓                                                                    │
+│ 5. Database.ShouldTrackItem() checks filters (using Constants)         │
+│    ↓                                                                    │
+│ 6. Database.AddEntry() stores to SavedVariables                        │
+│    ↓                                                                    │
+│ 7. MainWindow.UpdateList() refreshes display (if open)                 │
+└─────────────────────────────────────────────────────────────────────────┘
+
+FILTER UPDATE FLOW:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. User types in Winner filter box                                     │
+│    ↓                                                                    │
+│ 2. MainWindow EditBox OnTextChanged fires                              │
+│    ↓                                                                    │
+│ 3. Filters.SetWinnerFilter() updates filter state                      │
+│    ↓                                                                    │
+│ 4. MainWindow.UpdateList() called                                      │
+│    ↓                                                                    │
+│ 5. Filters.GetFilteredEntries() retrieves from Database                │
+│    ↓                                                                    │
+│ 6. Filters.ApplyFilters() processes each entry                         │
+│    ↓                                                                    │
+│ 7. MainWindow.DisplayEntries() renders rows                            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                         EXTENSIBILITY PATTERNS                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+ADDING A NEW FEATURE:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. Decide which layer(s) it belongs to                                 │
+│ 2. Add constants to Utils/Constants.lua if needed                      │
+│ 3. Add helper functions to Utils/Helpers.lua if needed                 │
+│ 4. Add data operations to Data/Database.lua if needed                  │
+│ 5. Add filtering logic to Data/Filters.lua if needed                   │
+│ 6. Add UI to UI/MainWindow.lua or UI/SettingsPanel.lua                 │
+│ 7. Wire it up in Core.lua if it needs coordination                     │
+│ 8. Update TOC file if new files were added                             │
+└─────────────────────────────────────────────────────────────────────────┘
+
+EXAMPLE - Add Item Icons:
+  • Constants.lua: Add SHOW_ICONS = true
+  • Helpers.lua: Add GetItemIcon() function
+  • MainWindow.lua: Update CreateRow() to display icons
+  (Only 3 files touched!)
+
+EXAMPLE - Add Export Feature:
+  • Create new file: Export.lua
+  • Update TOC to load Export.lua
+  • MainWindow.lua: Add export button
+  (Isolated new module!)
+
+EXAMPLE - Add Roll Tracking:
+  • Create new file: Data/RollTracker.lua
+  • Update Constants with roll patterns
+  • Core.lua: Register CHAT_MSG_SYSTEM event
+  • Core.lua: Route rolls to RollTracker
+  (Clean addition without modifying existing features!)
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                           FILE STATISTICS                                 ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Module              Lines    Purpose                Dependencies
+─────────────────────────────────────────────────────────────────────────────
+Constants.lua       114      Configuration          None
+Helpers.lua         155      Utilities              Constants
+Database.lua        243      Data persistence       Constants, Helpers
+Filters.lua         227      Query/filter logic     Constants, Helpers, DB
+SettingsPanel.lua   178      Settings UI            All Data + Utils
+MainWindow.lua      334      Main UI                All Data + Utils
+Core.lua            238      Coordinator            All modules
+─────────────────────────────────────────────────────────────────────────────
+TOTAL              1,489     Clean, modular code
+
+Original monolithic file: 850 lines
+Refactored total: 1,489 lines (+75% for structure and extensibility)
+
+Value: Much easier to understand, extend, test, and maintain!
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                             QUICK START                                   ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+For Users:
+  • Install addon to Interface/AddOns/BronzebeardLootTable/
+  • Type /blt to open main window
+  • Type /blt config for settings
+  • Type /blt stats for statistics
+
+For Developers:
+  • Read ARCHITECTURE.md for deep dive
+  • Read REFACTORING_SUMMARY.md for before/after comparison
+  • Follow existing patterns when adding features
+  • Keep modules focused on single responsibility
+  • Update TOC when adding new files
+
+Questions? See ARCHITECTURE.md for detailed examples!
