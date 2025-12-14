@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Bronzebeard Loot Table
+## Notes: Tracks loot history with advanced filtering and viewing options
+## Author: BronzebeardTeam
+## Version: 1.0.0
+## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableSettings
+
+BronzebeardLootTable.lua
