@@ -129,6 +129,36 @@ function SettingsPanel:CreateSpecialFilters(parent)
     end)
     
     parent.markCheck = markCheck
+    yOffset = yOffset - 30
+    
+    -- Hide Conjured Items checkbox
+    local conjuredCheck = CreateFrame("CheckButton", "BLTConjuredCheck", parent, "UICheckButtonTemplate")
+    conjuredCheck:SetPoint("TOPLEFT", 16, yOffset)
+    
+    local conjuredLabel = parent:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    conjuredLabel:SetPoint("LEFT", conjuredCheck, "RIGHT", 0, 0)
+    conjuredLabel:SetText("Hide Conjured Items (Soul Shards, Healthstones, etc.)")
+    
+    conjuredCheck:SetScript("OnClick", function(self)
+        database:UpdateSetting("hideConjuredItems", self:GetChecked())
+    end)
+    
+    parent.conjuredCheck = conjuredCheck
+    yOffset = yOffset - 30
+    
+    -- Enable Debug Logs checkbox
+    local debugCheck = CreateFrame("CheckButton", "BLTDebugCheck", parent, "UICheckButtonTemplate")
+    debugCheck:SetPoint("TOPLEFT", 16, yOffset)
+    
+    local debugLabel = parent:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    debugLabel:SetPoint("LEFT", debugCheck, "RIGHT", 0, 0)
+    debugLabel:SetText("Enable Debug Logs")
+    
+    debugCheck:SetScript("OnClick", function(self)
+        database:UpdateSetting("enableDebugLogs", self:GetChecked())
+    end)
+    
+    parent.debugCheck = debugCheck
     parent.specialYOffset = yOffset
 end
 
@@ -215,6 +245,14 @@ function SettingsPanel:RefreshSettings()
     
     if panel.markCheck then
         panel.markCheck:SetChecked(settings.hideMarkOfTriumph)
+    end
+    
+    if panel.conjuredCheck then
+        panel.conjuredCheck:SetChecked(settings.hideConjuredItems)
+    end
+    
+    if panel.debugCheck then
+        panel.debugCheck:SetChecked(settings.enableDebugLogs ~= false)
     end
     
     -- Update database info

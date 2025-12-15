@@ -22,6 +22,10 @@ local settingsPanel = nil
 -- Event frame
 local eventFrame = nil
 
+-- Instance tracking
+local currentInstance = nil  -- {zone, instanceID, runKey, lastEntryTime}
+local lastZoneChange = 0
+
 -- Initialize addon
 function Core:Initialize()
     -- Get module references
@@ -55,6 +59,7 @@ function Core:RegisterEvents()
     eventFrame:RegisterEvent(constants.EVENTS.LOGIN)
     eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    eventFrame:RegisterEvent("CHAT_MSG_MONEY")
     
     eventFrame:SetScript("OnEvent", function(frame, event, ...)
         Core:OnEvent(event, ...)
@@ -69,6 +74,8 @@ function Core:OnEvent(event, ...)
         self:OnPlayerLogin()
     elseif event == constants.EVENTS.LOOT then
         self:OnLootReceived(...)
+    elseif event == "CHAT_MSG_MONEY" then
+        self:OnMoneyReceived(...)
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
         self:OnZoneChanged()
     end
@@ -81,7 +88,9 @@ function Core:OnPlayerLogin()
     settingsPanel:Create()
     
     -- Debug: Show current zone/instance info on login
-    self:DebugZoneInfo("LOGIN")
+    if helpers:IsDebugEnabled() then
+        self:DebugZoneInfo("LOGIN")
+    end
 end
 
 -- Handle loot received
@@ -90,32 +99,57 @@ function Core:OnLootReceived(message)
     database = database or addon.Database
     constants = constants or addon.Constants
     
+    -- Ignore "You create:" messages (conjured items, crafted items, etc.)
+    if string.find(message, "^You create:") then
+        return
+    end
+    
     -- Debug: Log that we received a loot message
-    helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT MSG]" .. constants.COLOR_RESET .. " Received: " .. tostring(message))
+    if helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT MSG]" .. constants.COLOR_RESET .. " Received: " .. tostring(message))
+    end
+    
+    -- Check if this is a money message first
+    local moneyCopper = self:ParseMoneyMessage(message)
+    if moneyCopper > 0 then
+        -- This is a money message, handle it
+        self:OnMoneyReceived(message)
+        return
+    end
     
     -- Try to parse the loot message
     local playerName, itemLink, quantity = self:ParseLootMessage(message)
     
     if not playerName or not itemLink then
-        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Failed to parse loot message")
+        if helpers:IsDebugEnabled() then
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Failed to parse loot message")
+        end
         return -- Not a loot message we care about
     end
     
-    helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Parsed - Player: " .. tostring(playerName) .. " | Item: " .. tostring(itemLink) .. " | Quantity: " .. tostring(quantity or 1))
+    if helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Parsed - Player: " .. tostring(playerName) .. " | Item: " .. tostring(itemLink) .. " | Quantity: " .. tostring(quantity or 1))
+    end
     
     -- Get item info
     local itemInfo = self:GetItemInfo(itemLink)
     
     if not itemInfo then
-        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Item info not available for: " .. tostring(itemLink))
+        if helpers:IsDebugEnabled() then
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Item info not available for: " .. tostring(itemLink))
+        end
         return -- Item info not available
     end
     
-    helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Item: " .. tostring(itemInfo.name) .. " | Rarity: " .. tostring(itemInfo.rarity))
+    if helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " Item: " .. tostring(itemInfo.name) .. " | Rarity: " .. tostring(itemInfo.rarity))
+    end
     
     -- Check if we should track this item
     local shouldTrack = database:ShouldTrackItem(itemInfo.name, itemInfo.rarity)
-    helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " ShouldTrack: " .. tostring(shouldTrack))
+    if helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG LOOT]" .. constants.COLOR_RESET .. " ShouldTrack: " .. tostring(shouldTrack))
+    end
     
     if not shouldTrack then
         return
@@ -137,6 +171,19 @@ function Core:OnLootReceived(message)
         }
     end
     
+    -- Update instance tracking before adding entry
+    self:UpdateInstanceTracking()
+    
+    -- Determine if we need a new instance run
+    local forceNewRun = false
+    if currentInstance and currentInstance.lastEntryTime then
+        local timeSinceLastEntry = time() - currentInstance.lastEntryTime
+        -- If more than 30 minutes since last entry, likely a new run
+        if timeSinceLastEntry > 1800 then
+            forceNewRun = true
+        end
+    end
+    
     -- Create loot entry
     local entry = {
         player = playerName,
@@ -151,17 +198,117 @@ function Core:OnLootReceived(message)
         timestamp = time(),
     }
     
-    -- Debug: Show instance info when loot is tracked
-    self:DebugLootTracking(entry)
+    -- Add to database (will create new instance run if needed)
+    database:AddEntry(entry, forceNewRun)
     
-    -- Add to database
-    database:AddEntry(entry)
+    -- Update current instance tracking
+    if currentInstance then
+        currentInstance.lastEntryTime = entry.timestamp
+    end
+    
+    -- Debug: Show instance info when loot is tracked (after entry is added so we can get accurate run number)
+    if helpers:IsDebugEnabled() then
+        self:DebugLootTracking(entry)
+    end
     
     -- Update main window if it's open
     local mainWindow = addon.MainWindow
     if mainWindow:IsShown() then
         mainWindow:UpdateList()
     end
+end
+
+-- Handle money received
+function Core:OnMoneyReceived(message)
+    helpers = helpers or addon.Helpers
+    database = database or addon.Database
+    constants = constants or addon.Constants
+    
+    -- Parse money from message
+    -- Messages like "You loot 1 Silver, 48 Copper" or "You receive loot: 12g 34s 56c"
+    local moneyCopper = self:ParseMoneyMessage(message)
+    
+    if not moneyCopper or moneyCopper == 0 then
+        return -- Not a money message or no money
+    end
+    
+    -- Get current zone and instance info
+    local zone = GetRealZoneText() or "Unknown"
+    local instanceID = nil
+    
+    -- Try to get instance info
+    if type(GetInstanceInfo) == "function" then
+        local ok, name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, id = pcall(GetInstanceInfo)
+        if ok and id and id ~= 0 then
+            instanceID = id
+        end
+    end
+    
+    -- Add money to current instance (cumulative)
+    database:AddInstanceMoney(zone, instanceID, moneyCopper)
+    
+    local instanceInfo = ""
+    if instanceID then
+        -- Get the actual instance to find its run number
+        local instance = database:GetInstance(zone, instanceID)
+        local runNumber = 1
+        if instance then
+            runNumber = self:GetRunNumber(zone, instanceID, instance.startTime)
+        else
+            -- Instance not found yet, use next run number
+            runNumber = self:GetRunNumber(zone, instanceID)
+        end
+        instanceInfo = " (ID: " .. tostring(instanceID) .. ", Run #" .. runNumber .. ")"
+    end
+    
+    if helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG MONEY]" .. constants.COLOR_RESET .. 
+                     " Added " .. moneyCopper .. " copper to instance: " .. zone .. instanceInfo)
+    end
+    
+    -- Update main window if it's open
+    local mainWindow = addon.MainWindow
+    if mainWindow:IsShown() then
+        mainWindow:UpdateList()
+    end
+end
+
+-- Parse money from message
+function Core:ParseMoneyMessage(message)
+    if not message then
+        return 0
+    end
+    
+    local totalCopper = 0
+    
+    -- Handle "You loot X Silver, Y Copper" format (case insensitive)
+    local silverMatch = string.match(string.lower(message), "(%d+)%s+silver")
+    if silverMatch then
+        totalCopper = totalCopper + (tonumber(silverMatch) or 0) * 100
+    end
+    
+    local copperMatch = string.match(string.lower(message), "(%d+)%s+copper")
+    if copperMatch then
+        totalCopper = totalCopper + (tonumber(copperMatch) or 0)
+    end
+    
+    -- Also handle standard format "Xg Ys Zc" or "Xg", "Ys", "Zc"
+    local goldMatch = string.match(message, "(%d+)g")
+    if goldMatch then
+        totalCopper = totalCopper + (tonumber(goldMatch) or 0) * 10000
+    end
+    
+    local silverMatch2 = string.match(message, "(%d+)s")
+    if silverMatch2 and not silverMatch then
+        totalCopper = totalCopper + (tonumber(silverMatch2) or 0) * 100
+    end
+    
+    local copperMatch2 = string.match(message, "(%d+)c")
+    if copperMatch2 and not copperMatch then
+        totalCopper = totalCopper + (tonumber(copperMatch2) or 0)
+    end
+    
+    return totalCopper
 end
 
 -- Parse loot message
@@ -252,10 +399,46 @@ function Core:GetPlayerInfo(playerName)
     }
 end
 
+-- Get run number for a zone/instanceID
+-- If startTime is provided, returns the run number for that specific instance
+-- If startTime is nil, returns the next run number that would be assigned
+function Core:GetRunNumber(zone, instanceID, startTime)
+    database = database or addon.Database
+    local allInstances = database:GetAllInstances()
+    local runNumber = 1
+    
+    -- Count how many runs exist for this zone/instance
+    for _, inst in ipairs(allInstances) do
+        if inst.zone == zone then
+            -- If both have instanceID, match by instanceID; otherwise match by zone only
+            if (instanceID and inst.instanceID == instanceID) or 
+               (not instanceID and not inst.instanceID) then
+                -- If startTime is provided, only count runs before this one
+                if startTime then
+                    if inst.startTime < startTime then
+                        runNumber = runNumber + 1
+                    end
+                else
+                    -- No startTime means count all existing runs (for next run number)
+                    runNumber = runNumber + 1
+                end
+            end
+        end
+    end
+    
+    return runNumber
+end
+
 -- Debug: Print zone/instance information
-function Core:DebugZoneInfo(context)
+function Core:DebugZoneInfo(context, force)
     helpers = helpers or addon.Helpers
     constants = constants or addon.Constants
+    database = database or addon.Database
+    
+    -- Allow manual debug commands to bypass the toggle (force = true)
+    if not force and not helpers:IsDebugEnabled() then
+        return
+    end
     
     local zone = GetRealZoneText() or "Unknown"
     local zoneText = GetZoneText() or "Unknown"
@@ -268,9 +451,19 @@ function Core:DebugZoneInfo(context)
         
         if ok then
             if id and id ~= 0 then
+                -- Get the actual instance to find its run number
+                local instance = database:GetInstance(zone, id)
+                local runNumber = 1
+                if instance then
+                    runNumber = self:GetRunNumber(zone, id, instance.startTime)
+                else
+                    -- Instance not found yet, use next run number
+                    runNumber = self:GetRunNumber(zone, id)
+                end
                 helpers:Print(constants.COLOR_YELLOW .. "[DEBUG]" .. constants.COLOR_RESET .. " Instance: " .. (name or "Unknown") .. 
                              " | Type: " .. (instanceType or "none") .. 
                              " | ID: " .. tostring(id) .. 
+                             " | Run #" .. runNumber ..
                              " | Difficulty: " .. (difficultyName or "N/A"))
             else
                 helpers:Print(constants.COLOR_YELLOW .. "[DEBUG]" .. constants.COLOR_RESET .. " Not in an instance (ID: " .. tostring(id) .. ")")
@@ -287,10 +480,24 @@ end
 function Core:DebugLootTracking(entry)
     helpers = helpers or addon.Helpers
     constants = constants or addon.Constants
+    database = database or addon.Database
+    
+    if not helpers:IsDebugEnabled() then
+        return
+    end
     
     local instanceInfo = ""
     if entry.instanceID then
-        instanceInfo = " | InstanceID: " .. tostring(entry.instanceID)
+        -- Get the actual instance to find its run number
+        local instance = database:GetInstance(entry.zone, entry.instanceID)
+        local runNumber = 1
+        if instance then
+            runNumber = self:GetRunNumber(entry.zone, entry.instanceID, instance.startTime)
+        else
+            -- Instance not found yet, use next run number
+            runNumber = self:GetRunNumber(entry.zone, entry.instanceID)
+        end
+        instanceInfo = " | InstanceID: " .. tostring(entry.instanceID) .. " (Run #" .. runNumber .. ")"
     else
         instanceInfo = " | InstanceID: nil (not in instance)"
     end
@@ -314,9 +521,67 @@ function Core:OnZoneChanged()
         self.elapsed = (self.elapsed or 0) + elapsed
         if self.elapsed >= 0.5 then
             Core:DebugZoneInfo("ZONE_CHANGED")
+            Core:UpdateInstanceTracking()
             self:SetScript("OnUpdate", nil)
         end
     end)
+end
+
+-- Update instance tracking to detect new runs
+function Core:UpdateInstanceTracking()
+    helpers = helpers or addon.Helpers
+    constants = constants or addon.Constants
+    
+    local zone = GetRealZoneText() or "Unknown"
+    local instanceID = nil
+    
+    -- Get instance info
+    if type(GetInstanceInfo) == "function" then
+        local ok, name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, id = pcall(GetInstanceInfo)
+        if ok and id and id ~= 0 then
+            instanceID = id
+        end
+    end
+    
+    local now = time()
+    local forceNewRun = false
+    
+    -- Check if we've changed zones or instances
+    if not currentInstance then
+        -- First time tracking
+        forceNewRun = true
+    elseif currentInstance.zone ~= zone then
+        -- Zone changed - definitely new run
+        forceNewRun = true
+    elseif currentInstance.instanceID ~= instanceID then
+        -- Instance ID changed - new run
+        forceNewRun = true
+    elseif currentInstance.lastEntryTime and (now - currentInstance.lastEntryTime) > 1800 then
+        -- More than 30 minutes since last entry - likely new run
+        forceNewRun = true
+    elseif (now - lastZoneChange) > 300 and instanceID then
+        -- More than 5 minutes since zone change and we're in an instance - might be new run
+        -- This handles the case where instance was reset but we didn't leave
+        forceNewRun = true
+    end
+    
+    -- Update current instance tracking
+    if forceNewRun or not currentInstance then
+        currentInstance = {
+            zone = zone,
+            instanceID = instanceID,
+            runKey = nil,  -- Will be set when first entry is added
+            lastEntryTime = nil,
+        }
+        
+        if instanceID and helpers:IsDebugEnabled() then
+            local runNumber = self:GetRunNumber(zone, instanceID)
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG INSTANCE]" .. constants.COLOR_RESET .. 
+                         " New instance run detected: " .. zone .. " (ID: " .. tostring(instanceID) .. ", Run #" .. runNumber .. ")")
+        end
+    end
+    
+    lastZoneChange = now
 end
 
 -- Register slash commands
@@ -357,8 +622,8 @@ function Core:HandleSlashCommand(msg)
         self:ShowHelp()
         
     elseif msg == "debug" then
-        -- Show debug info
-        self:DebugZoneInfo("MANUAL")
+        -- Show debug info (force = true to bypass toggle)
+        self:DebugZoneInfo("MANUAL", true)
         
     else
         -- Default: toggle main window

@@ -3,12 +3,14 @@
 ## Notes: Tracks loot history with advanced filtering and viewing options
 ## Author: BronzebeardTeam
 ## Version: 1.0.0
-## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableSettings
+## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableSettings, BronzebeardLootTableDBIndexes
 
 Utils\Constants.lua
 Utils\Helpers.lua
 Data\Database.lua
 Data\Filters.lua
 UI\SettingsPanel.lua
+UI\TableView.lua
+UI\ListView.lua
 UI\MainWindow.lua
 Core.lua

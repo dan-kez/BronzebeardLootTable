@@ -65,6 +65,39 @@ Constants.HEIRLOOM_QUALITY = 7
 -- Filter item names
 Constants.MARK_OF_TRIUMPH = "Mark of Triumph"
 
+-- Conjured items (soul shards, healthstones, etc.)
+Constants.CONJURED_ITEMS = {
+    ["Soul Shard"] = true,
+    ["Minor Healthstone"] = true,
+    ["Lesser Healthstone"] = true,
+    ["Healthstone"] = true,
+    ["Greater Healthstone"] = true,
+    ["Major Healthstone"] = true,
+    ["Master Healthstone"] = true,
+    ["Demonic Healthstone"] = true,
+    ["Fel Healthstone"] = true,
+    ["Soulstone"] = true,
+    ["Minor Soulstone"] = true,
+    ["Lesser Soulstone"] = true,
+    ["Greater Soulstone"] = true,
+    ["Major Soulstone"] = true,
+    ["Master Soulstone"] = true,
+    ["Demonic Soulstone"] = true,
+    ["Fel Soulstone"] = true,
+    ["Firestone"] = true,
+    ["Greater Firestone"] = true,
+    ["Major Firestone"] = true,
+    ["Master Firestone"] = true,
+    ["Demonic Firestone"] = true,
+    ["Fel Firestone"] = true,
+    ["Spellstone"] = true,
+    ["Greater Spellstone"] = true,
+    ["Major Spellstone"] = true,
+    ["Master Spellstone"] = true,
+    ["Demonic Spellstone"] = true,
+    ["Fel Spellstone"] = true,
+}
+
 -- Instance run grouping settings
 Constants.RUN_GROUP_WINDOW = 14400 -- 4 hours in seconds
 
@@ -79,10 +112,9 @@ Constants.UI = {
     },
     COLUMN_WIDTHS = {
         TIME = 80,
-        WINNER = 120,
-        CLASS = 80,
-        ITEM = 300,
-        ZONE = 150,
+        WINNER = 150,
+        ITEM = 350,
+        ROLL_DETAILS = 150,
     },
     ROW_HEIGHT = 20,
     HEADER_HEIGHT = 25,
@@ -100,6 +132,8 @@ Constants.DEFAULT_SETTINGS = {
     },
     hideTanItems = false,
     hideMarkOfTriumph = false,
+    hideConjuredItems = false,
+    enableDebugLogs = true,
 }
 
 -- Events to monitor

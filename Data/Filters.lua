@@ -95,9 +95,26 @@ function Filters:EntryPassesFilters(entry, todayStart)
         end
     end
     
-    -- Item filter
+    -- Item filter (fuzzy search)
     if currentFilters.itemText ~= "" then
-        if not helpers:StringContains(entry.itemName, currentFilters.itemText) then
+        local searchText = string.lower(currentFilters.itemText)
+        local itemName = string.lower(entry.itemName or "")
+        
+        -- Simple fuzzy matching: check if all search words appear in item name
+        local searchWords = {}
+        for word in string.gmatch(searchText, "%S+") do
+            table.insert(searchWords, word)
+        end
+        
+        local allMatch = true
+        for _, word in ipairs(searchWords) do
+            if not string.find(itemName, word, 1, true) then
+                allMatch = false
+                break
+            end
+        end
+        
+        if not allMatch then
             return false
         end
     end
@@ -122,16 +139,48 @@ end
 -- Check if entry matches instance/run filter
 function Filters:EntryMatchesInstance(entry, instance)
     local constants = addon.Constants
+    local database = addon.Database
     
     -- Check if entry is in the same zone
     if entry.zone ~= instance.zone then
         return false
     end
     
-    -- If instance has an instanceID, match by instanceID
+    -- If entry has instanceKey stored, use it for exact match
+    if entry.instanceKey and instance.key then
+        return entry.instanceKey == instance.key
+    end
+    
+    -- If instance has a runID (from new structure), match by exact instance key
+    if instance.runID and instance.key then
+        -- Get the instance from database to check if entry belongs to it
+        local instanceData = database:GetInstanceByKey(instance.key)
+        if instanceData then
+            -- Check if entry is in this instance's entries
+            for _, instEntry in ipairs(instanceData.entries) do
+                if instEntry == entry or 
+                   (instEntry.timestamp == entry.timestamp and 
+                    instEntry.player == entry.player and 
+                    instEntry.itemName == entry.itemName) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    
+    -- Legacy matching for old structure
+    -- If instance has an instanceID, match by instanceID and time window
     if instance.instanceID then
         -- Entry must have the same instanceID
         if not entry.instanceID or entry.instanceID ~= instance.instanceID then
+            return false
+        end
+        -- Also check time window to distinguish runs
+        if entry.timestamp < instance.startTime then
+            return false
+        end
+        if entry.timestamp > (instance.startTime + constants.RUN_GROUP_WINDOW) then
             return false
         end
         return true
@@ -149,85 +198,28 @@ function Filters:EntryMatchesInstance(entry, instance)
     end
 end
 
--- Build instance runs list from entries
+-- Build instance runs list from database instances
 function Filters:BuildInstanceRuns(entries)
-    local constants = addon.Constants
+    -- entries parameter kept for compatibility but not used
     local helpers = addon.Helpers
+    local database = addon.Database
     
-    -- Map instance ID to entries (for instances)
-    -- Map zone to entries (for non-instance zones, fallback to time-based grouping)
-    local instanceGroups = {} -- instanceID -> {zone, entries}
-    local zoneEntries = {} -- zone -> {entries} (for non-instance zones)
-    
-    for _, entry in ipairs(entries) do
-        local zone = entry.zone
-        if zone and zone ~= "" then
-            -- If entry has an instance ID, group by instance ID
-            if entry.instanceID and entry.instanceID ~= 0 then
-                local key = zone .. ":" .. tostring(entry.instanceID)
-                if not instanceGroups[key] then
-                    instanceGroups[key] = {
-                        zone = zone,
-                        instanceID = entry.instanceID,
-                        entries = {},
-                    }
-                end
-                table.insert(instanceGroups[key].entries, entry)
-            else
-                -- For non-instance zones, use time-based grouping
-                if not zoneEntries[zone] then
-                    zoneEntries[zone] = {}
-                end
-                table.insert(zoneEntries[zone], entry)
-            end
-        end
-    end
-    
+    -- Get all instances from database (much more efficient - O(n) where n = instances, not entries)
+    local allInstances = database:GetAllInstances()
     local runs = {}
     
-    -- Process instance-based groups
-    for key, group in pairs(instanceGroups) do
-        -- Sort entries by timestamp
-        table.sort(group.entries, function(a, b)
-            return a.timestamp < b.timestamp
-        end)
-        
-        -- Get first timestamp as start time
-        local startTime = group.entries[1].timestamp
-        
+    for _, instanceData in ipairs(allInstances) do
         table.insert(runs, {
-            zone = group.zone,
-            instanceID = group.instanceID,
-            startTime = startTime,
-            displayName = group.zone .. " - " .. helpers:FormatTime(startTime, "%H:%M"),
+            key = instanceData.key,
+            zone = instanceData.zone,
+            instanceID = instanceData.instanceID,
+            runID = instanceData.runID,
+            startTime = instanceData.startTime,
+            displayName = instanceData.zone .. " - " .. helpers:FormatTime(instanceData.startTime, "%H:%M"),
         })
     end
     
-    -- Process non-instance zones with time-based grouping
-    for zone, entries in pairs(zoneEntries) do
-        -- Sort entries by timestamp
-        table.sort(entries, function(a, b)
-            return a.timestamp < b.timestamp
-        end)
-        
-        local currentRunStart = nil
-        
-        for _, entry in ipairs(entries) do
-            local ts = entry.timestamp
-            -- Start new run if no current run or timestamp is > 4 hours after run start
-            if not currentRunStart or (ts - currentRunStart) > constants.RUN_GROUP_WINDOW then
-                currentRunStart = ts
-                table.insert(runs, {
-                    zone = zone,
-                    instanceID = nil,
-                    startTime = ts,
-                    displayName = zone .. " - " .. helpers:FormatTime(ts, "%H:%M"),
-                })
-            end
-        end
-    end
-    
-    -- Sort runs by time (newest first)
+    -- Already sorted by GetAllInstances, but ensure it's correct
     table.sort(runs, function(a, b)
         return a.startTime > b.startTime
     end)

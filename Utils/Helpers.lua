@@ -189,3 +189,12 @@ function Helpers:SortedPairs(tbl, sortFunc)
         end
     end
 end
+
+-- Check if debug logging is enabled
+function Helpers:IsDebugEnabled()
+    local database = addon.Database
+    if database then
+        return database:GetSetting("enableDebugLogs") ~= false
+    end
+    return true -- Default to enabled if database not initialized yet
+end
