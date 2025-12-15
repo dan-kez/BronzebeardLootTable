@@ -83,19 +83,25 @@ function MainWindow:CreateFilterSection(parent)
     filterBg:SetBackdropColor(0, 0, 0, 0.5)
     
     -- Winner filter
-    local winnerEdit = self:CreateFilterEditBox(filterBg, "Winner:", 10, -10, function()
+    local winnerEdit = self:CreateFilterEditBox(filterBg, "Winner:", 10, -10, nil)
+    parent.winnerEdit = winnerEdit
+    winnerEdit:SetScript("OnTextChanged", function()
         filters:SetWinnerFilter(winnerEdit:GetText())
         MainWindow:UpdateList()
     end)
     
     -- Item filter
-    local itemEdit = self:CreateFilterEditBox(filterBg, "Item:", 170, -10, function()
+    local itemEdit = self:CreateFilterEditBox(filterBg, "Item:", 170, -10, nil)
+    parent.itemEdit = itemEdit
+    itemEdit:SetScript("OnTextChanged", function()
         filters:SetItemFilter(itemEdit:GetText())
         MainWindow:UpdateList()
     end)
     
     -- Class filter
-    local classEdit = self:CreateFilterEditBox(filterBg, "Class:", 330, -10, function()
+    local classEdit = self:CreateFilterEditBox(filterBg, "Class:", 330, -10, nil)
+    parent.classEdit = classEdit
+    classEdit:SetScript("OnTextChanged", function()
         filters:SetClassFilter(classEdit:GetText())
         MainWindow:UpdateList()
     end)
@@ -110,9 +116,6 @@ function MainWindow:CreateFilterSection(parent)
     local clearBtn = self:CreateClearButton(filterBg)
     
     parent.filterBg = filterBg
-    parent.winnerEdit = winnerEdit
-    parent.itemEdit = itemEdit
-    parent.classEdit = classEdit
     parent.instanceDropdown = instanceDropdown
     parent.todayCheck = todayCheck
     parent.clearBtn = clearBtn
@@ -128,7 +131,9 @@ function MainWindow:CreateFilterEditBox(parent, label, x, y, onChangeCallback)
     editBox:SetSize(150, 20)
     editBox:SetPoint("TOPLEFT", x, y - 20)
     editBox:SetAutoFocus(false)
-    editBox:SetScript("OnTextChanged", onChangeCallback)
+    if onChangeCallback then
+        editBox:SetScript("OnTextChanged", onChangeCallback)
+    end
     
     editBox.label = labelText
     return editBox
@@ -379,7 +384,18 @@ function MainWindow:CreateRow()
     
     row:SetScript("OnEnter", function(self)
         self.bg:SetAlpha(0.3)
-        MainWindow:ShowRowTooltip(self)
+        -- Show row tooltip with a small delay to allow item tooltip to take priority
+        local delayFrame = CreateFrame("Frame")
+        delayFrame:SetScript("OnUpdate", function(delay)
+            delay.elapsed = (delay.elapsed or 0) + 0.05
+            if delay.elapsed >= 0.05 then
+                -- Only show row tooltip if still hovering and not over item column
+                if self:IsMouseOver() and not self.item:IsMouseOver() then
+                    MainWindow:ShowRowTooltip(self)
+                end
+                delay:SetScript("OnUpdate", nil)
+            end
+        end)
     end)
     
     row:SetScript("OnLeave", function(self)
@@ -399,7 +415,7 @@ function MainWindow:CreateRow()
     row.class = self:CreateRowColumn(row, xOffset, cols.CLASS)
     xOffset = xOffset + cols.CLASS + 10
     
-    row.item = self:CreateRowColumn(row, xOffset, cols.ITEM)
+    row.item = self:CreateItemColumn(row, xOffset, cols.ITEM)
     xOffset = xOffset + cols.ITEM + 10
     
     row.zone = self:CreateRowColumn(row, xOffset, cols.ZONE)
@@ -416,6 +432,45 @@ function MainWindow:CreateRowColumn(parent, x, width)
     return column
 end
 
+-- Create an item column with tooltip support
+function MainWindow:CreateItemColumn(parent, x, width)
+    local itemFrame = CreateFrame("Frame", nil, parent)
+    itemFrame:SetPoint("LEFT", x, 0)
+    itemFrame:SetSize(width, parent:GetHeight())
+    itemFrame:EnableMouse(true)
+    
+    -- Text display
+    local itemText = itemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    itemText:SetPoint("LEFT", 0, 0)
+    itemText:SetWidth(width)
+    itemText:SetJustifyH("LEFT")
+    itemFrame.text = itemText
+    
+    -- Store item link for tooltip
+    itemFrame.itemLink = nil
+    
+    -- Set up tooltip handlers
+    itemFrame:SetScript("OnEnter", function(self)
+        -- Hide row tooltip if it's showing
+        if self:GetParent().tooltipShown then
+            GameTooltip:Hide()
+            self:GetParent().tooltipShown = false
+        end
+        
+        if self.itemLink then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(self.itemLink)
+            GameTooltip:Show()
+        end
+    end)
+    
+    itemFrame:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+    
+    return itemFrame
+end
+
 -- Update row with entry data
 function MainWindow:UpdateRow(row, entry)
     local helpers = addon.Helpers
@@ -424,7 +479,18 @@ function MainWindow:UpdateRow(row, entry)
     row.time:SetText(helpers:FormatTime(entry.timestamp))
     row.winner:SetText(entry.player)
     row.class:SetText(entry.class)
-    row.item:SetText(entry.itemLink)
+    
+    -- Display item with quantity if > 1 (backward compatible: default to 1 if not set)
+    local quantity = entry.quantity or 1
+    local itemText = entry.itemLink
+    if quantity > 1 then
+        itemText = itemText .. " x" .. tostring(quantity)
+    end
+    
+    -- Set item text and link for tooltip
+    row.item.text:SetText(itemText)
+    row.item.itemLink = entry.itemLink
+    
     row.zone:SetText(entry.zone)
     
     -- Color class name
@@ -442,6 +508,10 @@ function MainWindow:ShowRowTooltip(row)
     GameTooltip:AddLine("Class: " .. entry.class, 0.7, 0.7, 0.7)
     GameTooltip:AddLine("Guild: " .. entry.guild, 0.7, 0.7, 0.7)
     GameTooltip:AddLine("Zone: " .. entry.zone, 0.7, 0.7, 0.7)
+    local quantity = entry.quantity or 1
+    if quantity > 1 then
+        GameTooltip:AddLine("Quantity: " .. tostring(quantity), 0.7, 0.7, 0.7)
+    end
     GameTooltip:AddLine(helpers:FormatDateTime(entry.timestamp), 0.5, 0.5, 0.5)
     GameTooltip:Show()
 end

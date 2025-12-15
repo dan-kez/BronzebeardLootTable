@@ -110,8 +110,12 @@ Constants.EVENTS = {
 
 -- Loot message patterns (for parsing chat messages)
 Constants.LOOT_PATTERNS = {
+    -- Third person patterns
     "(.+) receives loot: (.+)%.",
     "(.+) receives item: (.+)%.",
+    -- First person patterns (for your own loot)
+    "You receive loot: (.+)%.",
+    "You receive item: (.+)%.",
 }
 
 -- Slash commands

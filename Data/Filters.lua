@@ -128,16 +128,25 @@ function Filters:EntryMatchesInstance(entry, instance)
         return false
     end
     
-    -- Check if entry is within the run time window
-    if entry.timestamp < instance.startTime then
-        return false
+    -- If instance has an instanceID, match by instanceID
+    if instance.instanceID then
+        -- Entry must have the same instanceID
+        if not entry.instanceID or entry.instanceID ~= instance.instanceID then
+            return false
+        end
+        return true
+    else
+        -- For non-instance zones, use time-based matching
+        if entry.timestamp < instance.startTime then
+            return false
+        end
+        
+        if entry.timestamp > (instance.startTime + constants.RUN_GROUP_WINDOW) then
+            return false
+        end
+        
+        return true
     end
-    
-    if entry.timestamp > (instance.startTime + constants.RUN_GROUP_WINDOW) then
-        return false
-    end
-    
-    return true
 end
 
 -- Build instance runs list from entries
@@ -145,33 +154,72 @@ function Filters:BuildInstanceRuns(entries)
     local constants = addon.Constants
     local helpers = addon.Helpers
     
-    -- Map zone to list of timestamps
-    local zoneTimestamps = {}
+    -- Map instance ID to entries (for instances)
+    -- Map zone to entries (for non-instance zones, fallback to time-based grouping)
+    local instanceGroups = {} -- instanceID -> {zone, entries}
+    local zoneEntries = {} -- zone -> {entries} (for non-instance zones)
     
     for _, entry in ipairs(entries) do
         local zone = entry.zone
         if zone and zone ~= "" then
-            if not zoneTimestamps[zone] then
-                zoneTimestamps[zone] = {}
+            -- If entry has an instance ID, group by instance ID
+            if entry.instanceID and entry.instanceID ~= 0 then
+                local key = zone .. ":" .. tostring(entry.instanceID)
+                if not instanceGroups[key] then
+                    instanceGroups[key] = {
+                        zone = zone,
+                        instanceID = entry.instanceID,
+                        entries = {},
+                    }
+                end
+                table.insert(instanceGroups[key].entries, entry)
+            else
+                -- For non-instance zones, use time-based grouping
+                if not zoneEntries[zone] then
+                    zoneEntries[zone] = {}
+                end
+                table.insert(zoneEntries[zone], entry)
             end
-            table.insert(zoneTimestamps[zone], entry.timestamp)
         end
     end
     
-    -- Group timestamps into runs
     local runs = {}
     
-    for zone, timestamps in pairs(zoneTimestamps) do
-        table.sort(timestamps)
+    -- Process instance-based groups
+    for key, group in pairs(instanceGroups) do
+        -- Sort entries by timestamp
+        table.sort(group.entries, function(a, b)
+            return a.timestamp < b.timestamp
+        end)
+        
+        -- Get first timestamp as start time
+        local startTime = group.entries[1].timestamp
+        
+        table.insert(runs, {
+            zone = group.zone,
+            instanceID = group.instanceID,
+            startTime = startTime,
+            displayName = group.zone .. " - " .. helpers:FormatTime(startTime, "%H:%M"),
+        })
+    end
+    
+    -- Process non-instance zones with time-based grouping
+    for zone, entries in pairs(zoneEntries) do
+        -- Sort entries by timestamp
+        table.sort(entries, function(a, b)
+            return a.timestamp < b.timestamp
+        end)
         
         local currentRunStart = nil
         
-        for _, ts in ipairs(timestamps) do
+        for _, entry in ipairs(entries) do
+            local ts = entry.timestamp
             -- Start new run if no current run or timestamp is > 4 hours after run start
             if not currentRunStart or (ts - currentRunStart) > constants.RUN_GROUP_WINDOW then
                 currentRunStart = ts
                 table.insert(runs, {
                     zone = zone,
+                    instanceID = nil,
                     startTime = ts,
                     displayName = zone .. " - " .. helpers:FormatTime(ts, "%H:%M"),
                 })
