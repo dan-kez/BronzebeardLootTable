@@ -4,7 +4,7 @@
 -- Create addon namespace
 local addonName, addon = ...
 
--- Make addon globally accessible for debugging (optional)
+-- Make globally accessible (optional, for debugging)
 _G.BronzebeardLootTable = addon
 
 -- Create Core namespace
@@ -260,5 +260,14 @@ function Core:GetName()
     return constants.ADDON_NAME
 end
 
--- Initialize addon when file loads
-Core:Initialize()
+-- Setup initialization on addon loaded
+local initFrame = CreateFrame("Frame")
+initFrame:RegisterEvent("ADDON_LOADED")
+initFrame:SetScript("OnEvent", function(self, event, loadedAddonName)
+    if loadedAddonName == "BronzebeardLootTable" then
+        -- All files have been loaded, now initialize
+        Core:Initialize()
+        -- Unregister to prevent re-initialization
+        self:UnregisterEvent("ADDON_LOADED")
+    end
+end)

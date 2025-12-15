@@ -5,17 +5,10 @@
 ## Version: 1.0.0
 ## SavedVariables: BronzebeardLootTableDB, BronzebeardLootTableSettings
 
-# Utilities (no dependencies)
-Utils/Constants.lua
-Utils/Helpers.lua
-
-# Data Layer
-Data/Database.lua
-Data/Filters.lua
-
-# UI Layer
-UI/SettingsPanel.lua
-UI/MainWindow.lua
-
-# Core (coordinates all modules)
+Utils\Constants.lua
+Utils\Helpers.lua
+Data\Database.lua
+Data\Filters.lua
+UI\SettingsPanel.lua
+UI\MainWindow.lua
 Core.lua

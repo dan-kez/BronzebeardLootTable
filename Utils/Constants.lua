@@ -3,6 +3,9 @@
 
 local addonName, addon = ...
 
+-- Make addon globally accessible (optional, for debugging)
+_G.BronzebeardLootTable = addon
+
 -- Create Constants namespace
 addon.Constants = {}
 local Constants = addon.Constants
