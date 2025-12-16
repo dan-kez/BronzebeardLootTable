@@ -122,14 +122,33 @@ function TableView:CreateMoneySection(parent)
     
     local moneyLabel = moneyBg:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     moneyLabel:SetPoint("LEFT", 10, 0)
-    moneyLabel:SetText("Total Gold Gained:")
+    moneyLabel:SetText("Net Proceeds:")
     
-    local moneyText = moneyBg:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    moneyText:SetPoint("LEFT", moneyLabel, "RIGHT", 10, 0)
+    -- Create a frame for the money text to enable tooltip
+    local moneyFrame = CreateFrame("Frame", nil, moneyBg)
+    moneyFrame:SetPoint("LEFT", moneyLabel, "RIGHT", 10, 0)
+    moneyFrame:SetSize(200, 20)
+    moneyFrame:EnableMouse(true)
+    
+    local moneyText = moneyFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    moneyText:SetPoint("LEFT", 0, 0)
     moneyText:SetText("0g 0s 0c")
+    
+    -- Store money data for tooltip
+    moneyFrame.moneyData = {gained = 0, spent = 0, net = 0}
+    
+    -- Set up tooltip handlers
+    moneyFrame:SetScript("OnEnter", function(self)
+        TableView:ShowMoneyTooltip(self)
+    end)
+    
+    moneyFrame:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
     
     parent.moneyBg = moneyBg
     parent.moneyText = moneyText
+    parent.moneyFrame = moneyFrame
 end
 
 -- Create list header
@@ -300,6 +319,18 @@ function TableView:CalculateMoney(entries)
     return database:GetTotalMoneyForEntries(entries)
 end
 
+-- Calculate repair costs for filtered entries
+function TableView:CalculateRepairCosts(entries)
+    local database = addon.Database
+    return database:GetTotalRepairCostsForEntries(entries)
+end
+
+-- Calculate net proceeds for filtered entries
+function TableView:CalculateNetProceeds(entries)
+    local database = addon.Database
+    return database:GetNetProceedsForEntries(entries)
+end
+
 -- Format money for display (using WoW standard format)
 function TableView:FormatMoney(copper)
     if not copper or copper == 0 then
@@ -334,8 +365,52 @@ function TableView:UpdateMoneyDisplay()
     local filters = addon.Filters
     local filteredEntries = filters:GetFilteredEntries()
     local totalMoney = self:CalculateMoney(filteredEntries)
+    local totalRepairCosts = self:CalculateRepairCosts(filteredEntries)
+    local netProceeds = self:CalculateNetProceeds(filteredEntries)
     
-    viewFrame.moneyText:SetText(self:FormatMoney(totalMoney))
+    -- Update the displayed text with net proceeds
+    viewFrame.moneyText:SetText(self:FormatMoney(netProceeds))
+    
+    -- Store data for tooltip
+    if viewFrame.moneyFrame then
+        viewFrame.moneyFrame.moneyData = {
+            gained = totalMoney,
+            spent = totalRepairCosts,
+            net = netProceeds
+        }
+    end
+end
+
+-- Show money tooltip with breakdown
+function TableView:ShowMoneyTooltip(moneyFrame)
+    if not moneyFrame or not moneyFrame.moneyData then
+        return
+    end
+    
+    local data = moneyFrame.moneyData
+    GameTooltip:SetOwner(moneyFrame, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Net Proceeds Breakdown", 1, 1, 1)
+    
+    -- Gold gained
+    GameTooltip:AddLine("Gold Gained: " .. self:FormatMoney(data.gained), 0.7, 0.7, 0.7)
+    
+    -- Repair costs
+    if data.spent > 0 then
+        GameTooltip:AddLine("Repair Costs: " .. self:FormatMoney(data.spent), 1, 0.3, 0.3)
+    else
+        GameTooltip:AddLine("Repair Costs: " .. self:FormatMoney(0), 0.7, 0.7, 0.7)
+    end
+    
+    -- Net proceeds (color based on positive/negative)
+    local r, g, b = 0.7, 0.7, 0.7
+    if data.net > 0 then
+        r, g, b = 0.3, 1, 0.3  -- Green for profit
+    elseif data.net < 0 then
+        r, g, b = 1, 0.3, 0.3  -- Red for loss
+    end
+    GameTooltip:AddLine("Net Proceeds: " .. self:FormatMoney(data.net), r, g, b)
+    
+    GameTooltip:Show()
 end
 
 -- Update the entry list

@@ -492,6 +492,17 @@ function Database:AddInstanceMoney(zone, instanceID, copper)
     BronzebeardLootTableDB.lastUpdate = time()
 end
 
+-- Add repair costs to instance metadata
+function Database:AddInstanceRepairCost(zone, instanceID, copper)
+    if not zone or copper == 0 then
+        return
+    end
+    
+    local instance = self:GetOrCreateInstance(zone, instanceID)
+    instance.metadata.moneySpent = (instance.metadata.moneySpent or 0) + copper
+    BronzebeardLootTableDB.lastUpdate = time()
+end
+
 -- Get money for an instance (gets most recent run if multiple exist)
 function Database:GetInstanceMoney(zone, instanceID)
     local instance = self:GetInstance(zone, instanceID)
@@ -513,18 +524,72 @@ end
 -- Get total money for filtered entries
 function Database:GetTotalMoneyForEntries(entries)
     local totalMoney = 0
-    local instanceKeys = {}
+    local processedInstances = {}
     
-    -- Group entries by instance
+    -- Group entries by instance using instanceKey
     for _, entry in ipairs(entries) do
-        local key = self:GetInstanceKey(entry.zone, entry.instanceID)
-        if not instanceKeys[key] then
-            instanceKeys[key] = true
-            totalMoney = totalMoney + self:GetInstanceMoney(entry.zone, entry.instanceID)
+        local instanceKey = entry.instanceKey
+        local instance = nil
+        
+        -- Try to get instance by key first
+        if instanceKey then
+            instance = self:GetInstanceByKey(instanceKey)
+        end
+        
+        -- Fallback to zone/instanceID lookup if instanceKey not available
+        if not instance then
+            instance = self:GetInstance(entry.zone, entry.instanceID)
+            -- Use composite key for tracking
+            instanceKey = (entry.zone or "Unknown") .. ":" .. (entry.instanceID or "none")
+        end
+        
+        -- Only count each instance once
+        if instance and instanceKey and not processedInstances[instanceKey] then
+            processedInstances[instanceKey] = true
+            totalMoney = totalMoney + (instance.metadata.moneyGained or 0)
         end
     end
     
     return totalMoney
+end
+
+-- Get total repair costs for filtered entries
+function Database:GetTotalRepairCostsForEntries(entries)
+    local totalRepairCosts = 0
+    local processedInstances = {}
+    
+    -- Group entries by instance using instanceKey
+    for _, entry in ipairs(entries) do
+        local instanceKey = entry.instanceKey
+        local instance = nil
+        
+        -- Try to get instance by key first
+        if instanceKey then
+            instance = self:GetInstanceByKey(instanceKey)
+        end
+        
+        -- Fallback to zone/instanceID lookup if instanceKey not available
+        if not instance then
+            instance = self:GetInstance(entry.zone, entry.instanceID)
+            -- Use composite key for tracking
+            instanceKey = (entry.zone or "Unknown") .. ":" .. (entry.instanceID or "none")
+        end
+        
+        -- Only count each instance once
+        if instance and instanceKey and not processedInstances[instanceKey] then
+            processedInstances[instanceKey] = true
+            totalRepairCosts = totalRepairCosts + (instance.metadata.moneySpent or 0)
+        end
+    end
+    
+    return totalRepairCosts
+end
+
+-- Get net proceeds (gold gained - repair costs) for filtered entries
+function Database:GetNetProceedsForEntries(entries)
+    local totalMoney = self:GetTotalMoneyForEntries(entries)
+    local totalRepairCosts = self:GetTotalRepairCostsForEntries(entries)
+    return totalMoney - totalRepairCosts
 end
 
 -- Get all instances (for list view)

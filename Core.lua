@@ -26,6 +26,10 @@ local eventFrame = nil
 local currentInstance = nil  -- {zone, instanceID, runKey, lastEntryTime}
 local lastZoneChange = 0
 
+-- Repair cost tracking (simplified)
+local repairCostBeforeRepair = 0  -- Cost before repair was initiated
+local repairInitiated = false     -- True when RepairAllItems was called
+
 -- Initialize addon
 function Core:Initialize()
     -- Get module references
@@ -41,6 +45,9 @@ function Core:Initialize()
     
     -- Register events
     self:RegisterEvents()
+    
+    -- Hook RepairAllItems to detect when repairs are clicked
+    self:HookRepairFunction()
     
     -- Register slash commands
     self:RegisterSlashCommands()
@@ -60,6 +67,9 @@ function Core:RegisterEvents()
     eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     eventFrame:RegisterEvent("CHAT_MSG_MONEY")
+    eventFrame:RegisterEvent("MERCHANT_SHOW")
+    eventFrame:RegisterEvent("MERCHANT_UPDATE")
+    eventFrame:RegisterEvent("PLAYER_MONEY")
     
     eventFrame:SetScript("OnEvent", function(frame, event, ...)
         Core:OnEvent(event, ...)
@@ -78,6 +88,12 @@ function Core:OnEvent(event, ...)
         self:OnMoneyReceived(...)
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
         self:OnZoneChanged()
+    elseif event == "MERCHANT_SHOW" then
+        self:OnMerchantShow()
+    elseif event == "MERCHANT_UPDATE" then
+        self:OnMerchantUpdate()
+    elseif event == "PLAYER_MONEY" then
+        self:OnPlayerMoney()
     end
 end
 
@@ -664,6 +680,238 @@ function Core:ShowHelp()
     helpers:Print(constants.COLOR_YELLOW .. "/blt stats" .. constants.COLOR_RESET .. " - Show statistics")
     helpers:Print(constants.COLOR_YELLOW .. "/blt debug" .. constants.COLOR_RESET .. " - Show debug zone/instance info")
     helpers:Print(constants.COLOR_YELLOW .. "/blt help" .. constants.COLOR_RESET .. " - Show this help")
+end
+
+-- Hook RepairAllItems function to detect when repairs are clicked
+function Core:HookRepairFunction()
+    if _G.RepairAllItems then
+        local originalRepairAllItems = _G.RepairAllItems
+        _G.RepairAllItems = function(...)
+            -- Check if merchant can repair and get repair cost before repair
+            local canRepair = CanMerchantRepair()
+            if canRepair then
+                local repairCost, canRepairNow = GetRepairAllCost()
+                if canRepairNow and repairCost > 0 then
+                    -- Store the cost that will be paid
+                    repairCostBeforeRepair = repairCost
+                    repairInitiated = true
+                    
+                    if helpers and helpers:IsDebugEnabled() then
+                        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                                     " Repair All button clicked! Cost before: " .. repairCost .. " copper")
+                    end
+                    
+                    -- Call original function
+                    originalRepairAllItems(...)
+                    
+                    -- Check repair completion immediately and with multiple retries
+                    local checkCount = 0
+                    local maxChecks = 10
+                    local function checkRepairWithRetry()
+                        checkCount = checkCount + 1
+                        
+                        if helpers and helpers:IsDebugEnabled() then
+                            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                                         " Immediate check #" .. checkCount .. " after repair...")
+                        end
+                        
+                        local completed = Core:CheckRepairCompletion()
+                        
+                        if not completed and repairInitiated and checkCount < maxChecks then
+                            -- Try again after a short delay
+                            C_Timer.After(0.1, checkRepairWithRetry)
+                        elseif not completed and checkCount >= maxChecks then
+                            if helpers and helpers:IsDebugEnabled() then
+                                helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                                             " Max immediate checks reached, will rely on events")
+                            end
+                        end
+                    end
+                    
+                    -- Start checking immediately
+                    checkRepairWithRetry()
+                    
+                    return
+                end
+            end
+            
+            -- Call original function
+            return originalRepairAllItems(...)
+        end
+    end
+end
+
+-- Handle merchant show (initialize state)
+function Core:OnMerchantShow()
+    -- Reset repair tracking state when merchant opens
+    repairInitiated = false
+    
+    -- Update repair cost baseline (in case items were equipped/unequipped)
+    local canRepair = CanMerchantRepair()
+    if canRepair then
+        local repairCost, canRepairNow = GetRepairAllCost()
+        if canRepairNow and repairCost > 0 then
+            repairCostBeforeRepair = repairCost
+        else
+            repairCostBeforeRepair = 0
+        end
+    else
+        repairCostBeforeRepair = 0
+    end
+    
+    if helpers and helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                     " Merchant opened. Can repair: " .. tostring(canRepair) .. 
+                     ", Repair cost: " .. repairCostBeforeRepair .. " copper")
+    end
+end
+
+-- Handle merchant update (cleanup, update baseline, and check repair completion)
+function Core:OnMerchantUpdate()
+    -- Check if merchant window is still open (cleanup if closed)
+    local merchantFrame = _G["MerchantFrame"]
+    if not merchantFrame or not merchantFrame:IsShown() then
+        -- Merchant closed, check if repair completed before cleanup
+        if repairInitiated then
+            self:CheckRepairCompletion()
+        end
+        repairInitiated = false
+        repairCostBeforeRepair = 0
+        return
+    end
+    
+    -- If repair was initiated, check if it completed (fallback detection)
+    if repairInitiated then
+        if helpers and helpers:IsDebugEnabled() then
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                         " MERCHANT_UPDATE event fired, checking repair completion...")
+        end
+        self:CheckRepairCompletion()
+    end
+    
+    -- Update repair cost baseline (in case items were equipped/unequipped)
+    -- Only update if repair wasn't just initiated (to avoid overwriting the baseline)
+    if not repairInitiated then
+        local canRepair = CanMerchantRepair()
+        if canRepair then
+            local repairCost, canRepairNow = GetRepairAllCost()
+            if canRepairNow and repairCost > 0 then
+                repairCostBeforeRepair = repairCost
+            end
+        end
+    end
+end
+
+-- Check if repair completed (shared function)
+function Core:CheckRepairCompletion()
+    if not repairInitiated then
+        return false
+    end
+    
+    -- Try to get repair cost (may fail if merchant closed)
+    local repairCost = 0
+    local canRepairNow = false
+    local canRepair = CanMerchantRepair()
+    
+    if canRepair then
+        repairCost, canRepairNow = GetRepairAllCost()
+    end
+    
+    if helpers and helpers:IsDebugEnabled() then
+        helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                     " Checking repair: costBefore=" .. repairCostBeforeRepair .. 
+                     ", costNow=" .. (repairCost or 0) .. 
+                     ", canRepair=" .. tostring(canRepair))
+    end
+    
+    -- Check if repair cost decreased (repair completed)
+    if repairCostBeforeRepair > 0 then
+        -- Check if repair cost decreased (repair completed)
+        -- This can happen in two ways:
+        -- 1. Merchant still open: repairCost < repairCostBeforeRepair
+        -- 2. Repair completed: repairCost == 0 (even if canRepairNow is nil)
+        if repairCost < repairCostBeforeRepair then
+            local repairCostPaid = repairCostBeforeRepair - repairCost
+            
+            if helpers and helpers:IsDebugEnabled() then
+                helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                             " Repair completed! Cost paid: " .. repairCostPaid .. " copper")
+            end
+            
+            self:TrackRepairCost(repairCostPaid)
+            repairCostBeforeRepair = repairCost
+            repairInitiated = false
+            return true
+        elseif not canRepair then
+            -- Merchant closed - repair must have completed (cost went to 0)
+            -- Use the full stored cost as the repair cost paid
+            if helpers and helpers:IsDebugEnabled() then
+                helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                             " Merchant closed after repair. Cost paid: " .. repairCostBeforeRepair .. " copper")
+            end
+            
+            local costToTrack = repairCostBeforeRepair
+            repairCostBeforeRepair = 0
+            repairInitiated = false
+            
+            self:TrackRepairCost(costToTrack)
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Handle player money change (backup repair completion detector)
+-- Note: This fires for ANY money change, not just repairs, so we use it as backup only
+function Core:OnPlayerMoney()
+    if repairInitiated then
+        if helpers and helpers:IsDebugEnabled() then
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                         " PLAYER_MONEY event fired (backup check), checking repair completion...")
+        end
+        self:CheckRepairCompletion()
+    end
+end
+
+-- Track repair cost (shared function)
+function Core:TrackRepairCost(repairCostPaid)
+    if repairCostPaid <= 0 then
+        return
+    end
+    
+    -- Get current zone and instance info
+    local zone = GetRealZoneText() or "Unknown"
+    local instanceID = nil
+    
+    -- Try to get instance info
+    if type(GetInstanceInfo) == "function" then
+        local ok, name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, id = pcall(GetInstanceInfo)
+        if ok and id and id ~= 0 then
+            instanceID = id
+        end
+    end
+    
+    -- Only track if we're in an instance (repair costs are most relevant there)
+    if instanceID or zone ~= "Unknown" then
+        database = database or addon.Database
+        database:AddInstanceRepairCost(zone, instanceID, repairCostPaid)
+        
+        if helpers and helpers:IsDebugEnabled() then
+            local instanceInfo = ""
+            if instanceID then
+                instanceInfo = " (ID: " .. tostring(instanceID) .. ")"
+            end
+            helpers:Print(constants.COLOR_YELLOW .. "[DEBUG REPAIR]" .. constants.COLOR_RESET .. 
+                         " Repairs detected! Added " .. repairCostPaid .. " copper repair cost to instance: " .. zone .. instanceInfo)
+        end
+        
+        -- Update main window if it's open
+        local mainWindow = addon.MainWindow
+        if mainWindow:IsShown() then
+            mainWindow:UpdateList()
+        end
+    end
 end
 
 -- Get addon version
